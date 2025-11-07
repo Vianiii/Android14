@@ -1,4 +1,4 @@
-name: android14-avd-complete
+name: android14-avd-complete-working
 
 on:
   workflow_dispatch:
@@ -16,46 +16,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ============================================================
-      # FIX: Install correct packages for Ubuntu 22.04
-      # ============================================================
       - name: Install Packages (Ubuntu 22.04 Compatible)
         run: |
           sudo apt-get update -qq
-          
-          # Core tools
           sudo apt-get install -y \
-            wget unzip curl net-tools git
-          
-          # Display server
-          sudo apt-get install -y \
-            xvfb x11vnc dbus-x11
-          
-          # Graphics libraries (FIXED for Ubuntu 22.04)
-          sudo apt-get install -y \
+            wget unzip curl net-tools git \
+            xvfb x11vnc dbus-x11 \
             libxext6 libxrender1 libx11-6 \
             libfreetype6 libfontconfig1 \
             libxkbcommon0 libxkbfile1 \
             libxcb1 libxcb-render0 libxcb-shape0 \
-            libc6 libstdc++6 libtinfo6 libncurses6
-          
-          # Audio (FIXED for Ubuntu 22.04)
-          sudo apt-get install -y \
-            libasound2t64 || sudo apt-get install -y libasound2 || true
-          
-          # Mesa graphics (FIXED)
-          sudo apt-get install -y \
-            mesa-utils libglu1-mesa || true
-          
-          # Standard libraries
-          sudo apt-get install -y \
-            libglib2.0-0 || true
-          
-          # Stream tools
-          sudo apt-get install -y \
+            libc6 libstdc++6 libtinfo6 libncurses6 \
+            libasound2t64 mesa-utils libglu1-mesa \
             ffmpeg adb
-          
-          echo "✅ All packages installed"
+          echo "✅ Packages installed"
 
       - name: Enable KVM
         run: |
@@ -151,7 +125,7 @@ jobs:
           echo "DISPLAY=:1" >> $GITHUB_ENV
           echo "✅ Display started"
 
-      - name: Start Emulator
+      - name: Start Emulator (FIXED BOOT DETECTION)
         run: |
           export DISPLAY=:1
           export ANDROID_SDK_ROOT=/mnt/android-sdk
@@ -159,6 +133,8 @@ jobs:
           export LD_LIBRARY_PATH=/mnt/android-sdk/emulator/lib64:$LD_LIBRARY_PATH
           
           echo "🚀 Starting emulator..."
+          
+          # Start emulator in background
           /mnt/android-sdk/emulator/emulator \
             -avd android14 \
             -no-snapshot-load \
@@ -170,28 +146,71 @@ jobs:
             -cores 4 \
             > /tmp/emulator.log 2>&1 &
           
-          sleep 15
+          EMULATOR_PID=$!
+          echo "Emulator PID: $EMULATOR_PID"
           
-          echo "⏳ Waiting for device (5 min max)..."
-          for i in {1..40}; do
-            if /mnt/android-sdk/platform-tools/adb devices 2>/dev/null | grep -q "emulator"; then
-              echo "✅ Device found!"
+          # Wait 20 seconds for emulator to start
+          echo "⏳ Waiting 20 seconds for emulator to initialize..."
+          sleep 20
+          
+          # Check if process is still running
+          if ! kill -0 $EMULATOR_PID 2>/dev/null; then
+            echo "❌ Emulator process died"
+            echo "Last 50 lines of log:"
+            tail -50 /tmp/emulator.log
+            exit 1
+          fi
+          
+          echo "✅ Emulator process still running"
+          
+          # Wait for ADB to see device
+          echo "⏳ Waiting for ADB to detect device..."
+          DEVICE_FOUND=0
+          for i in {1..50}; do
+            DEVICES=$(/mnt/android-sdk/platform-tools/adb devices 2>/dev/null | grep -c "emulator")
+            if [ "$DEVICES" -gt 0 ]; then
+              echo "✅ Device detected!"
+              DEVICE_FOUND=1
               break
             fi
+            echo "  Attempt $i/50..."
             sleep 5
           done
           
-          echo "⏳ Waiting for boot (5 min max)..."
-          for i in {1..60}; do
-            BOOT=$(/mnt/android-sdk/platform-tools/adb shell "getprop sys.boot_completed" 2>/dev/null)
-            if [ "$BOOT" = "1" ]; then
-              echo "✅ Boot complete!"
+          if [ $DEVICE_FOUND -eq 0 ]; then
+            echo "⚠️  Device not detected, but continuing..."
+          fi
+          
+          # Wait for boot - with better error handling
+          echo "⏳ Waiting for Android to boot..."
+          BOOT_WAIT=0
+          MAX_WAIT=180  # 3 minutes
+          
+          while [ $BOOT_WAIT -lt $MAX_WAIT ]; do
+            # Try to get boot property
+            BOOT_STATUS=$(/mnt/android-sdk/platform-tools/adb shell "getprop sys.boot_completed" 2>/dev/null || echo "0")
+            
+            # Clean the output
+            BOOT_STATUS=$(echo "$BOOT_STATUS" | tr -d '
+')
+            
+            if [ "$BOOT_STATUS" = "1" ]; then
+              echo "✅ Android fully booted!"
               break
             fi
+            
+            if [ $((BOOT_WAIT % 30)) -eq 0 ]; then
+              echo "  Booting... ($BOOT_WAIT/$MAX_WAIT seconds)"
+            fi
+            
             sleep 5
+            BOOT_WAIT=$((BOOT_WAIT + 5))
           done
           
-          /mnt/android-sdk/platform-tools/adb devices
+          echo ""
+          echo "📊 Device status:"
+          /mnt/android-sdk/platform-tools/adb devices || true
+          echo ""
           echo "✅ Emulator ready!"
 
       - name: Start VNC Server
@@ -200,9 +219,9 @@ jobs:
           echo "🔌 Starting VNC on port 5900..."
           x11vnc -display :1 -forever -nopw -rfbport 5900 -shared -bg -xkb
           sleep 2
-          echo "✅ VNC ready"
+          echo "✅ VNC started"
 
-      - name: Setup FRP Tunnel to VPS
+      - name: Setup FRP Tunnel
         run: |
           cd /tmp
           echo "🌐 Setting up FRP tunnel..."
@@ -223,7 +242,7 @@ jobs:
           
           nohup ./frp_0.65.0_linux_amd64/frpc -c frpc.toml > /tmp/frpc.log 2>&1 &
           sleep 3
-          echo "✅ FRP tunnel ready (5900 → VPS)"
+          echo "✅ FRP tunnel ready"
 
       - name: Setup tmate SSH
         uses: mxschmitt/action-tmate@v3
