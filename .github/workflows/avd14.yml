@@ -70,16 +70,16 @@ jobs:
           yes | /mnt/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
           echo "✅ Licenses accepted"
 
-      - name: Install Android 14 with Play Store
+      - name: Install Android 14
         run: |
-          echo "📥 Installing Android 14 with Play Store..."
-          /mnt/android-sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "emulator" "system-images;android-34;google_play;arm64-v8a"
+          echo "📥 Installing Android 14..."
+          /mnt/android-sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "emulator" "system-images;android-34;default;x86_64"
           echo "✅ Android 14 installed"
 
-      - name: Create AVD with Play Store
+      - name: Create AVD
         run: |
           echo "🔧 Creating AVD..."
-          echo "no" | /mnt/android-sdk/cmdline-tools/latest/bin/avdmanager create avd --force --name "android14" --package "system-images;android-34;google_play;arm64-v8a" --device "pixel_7"
+          echo "no" | /mnt/android-sdk/cmdline-tools/latest/bin/avdmanager create avd --force --name "android14" --package "system-images;android-34;default;x86_64" --device "pixel_7"
           AVD_INI="/mnt/android-avd/android14.avd/config.ini"
           sed -i '/^hw.ramSize=/d' "$AVD_INI"
           sed -i '/^disk.dataPartition.size=/d' "$AVD_INI"
@@ -147,6 +147,19 @@ jobs:
           done
           echo "✅ Emulator ready"
 
+      - name: Install Chrome APK
+        run: |
+          export PATH=/mnt/android-sdk/platform-tools:$PATH
+          cd /tmp
+          echo "📱 Installing Firefox browser..."
+          wget -q "https://archive.mozilla.org/pub/firefox/releases/latest/android-x86_64/en-US/firefox-latest.apk" -O firefox.apk
+          if [ -s firefox.apk ]; then
+            adb install firefox.apk 2>&1 | grep -i "success" && echo "✅ Firefox installed" || echo "⚠️  Installation issue"
+          else
+            echo "⚠️  Firefox download failed, using built-in browser"
+            adb shell pm enable com.android.browser
+          fi
+
       - name: Start VNC Server
         run: |
           export DISPLAY=:1
@@ -188,18 +201,18 @@ jobs:
         run: |
           echo ""
           echo "╔════════════════════════════════════════════════════════╗"
-          echo "║         ✅ ANDROID 14 AVD READY (PLAY STORE)          ║"
+          echo "║         ✅ ANDROID 14 AVD READY                       ║"
           echo "╚════════════════════════════════════════════════════════╝"
           echo ""
           echo "🌐 Browser Access (noVNC):"
           echo "   http://159.195.6.61"
           echo ""
           echo "📱 Device:"
-          echo "   OS: Android 14 (Google Play)"
+          echo "   OS: Android 14"
           echo "   Model: Pixel 7"
           echo "   RAM: 12GB"
           echo "   Storage: 40GB"
-          echo "   Architecture: ARM64"
+          echo "   Browser: Firefox + Built-in"
           echo ""
           echo "🔌 VNC Direct:"
           echo "   159.195.6.61:5900"
