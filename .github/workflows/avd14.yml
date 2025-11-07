@@ -1,4 +1,4 @@
-name: android14-avd-complete-working
+name: android14-avd-final
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Packages (Ubuntu 22.04 Compatible)
+      - name: Install Packages
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
@@ -90,7 +90,7 @@ jobs:
             "system-images;android-34;default;x86_64"
           echo "✅ Android 14 installed"
 
-      - name: Create AVD (12GB RAM, 40GB Storage)
+      - name: Create AVD
         run: |
           echo "🔧 Creating AVD..."
           echo "no" | /mnt/android-sdk/cmdline-tools/latest/bin/avdmanager create avd \
@@ -125,7 +125,7 @@ jobs:
           echo "DISPLAY=:1" >> $GITHUB_ENV
           echo "✅ Display started"
 
-      - name: Start Emulator (FIXED BOOT DETECTION)
+      - name: Start Emulator
         run: |
           export DISPLAY=:1
           export ANDROID_SDK_ROOT=/mnt/android-sdk
@@ -134,7 +134,6 @@ jobs:
           
           echo "🚀 Starting emulator..."
           
-          # Start emulator in background
           /mnt/android-sdk/emulator/emulator \
             -avd android14 \
             -no-snapshot-load \
@@ -149,22 +148,18 @@ jobs:
           EMULATOR_PID=$!
           echo "Emulator PID: $EMULATOR_PID"
           
-          # Wait 20 seconds for emulator to start
           echo "⏳ Waiting 20 seconds for emulator to initialize..."
           sleep 20
           
-          # Check if process is still running
           if ! kill -0 $EMULATOR_PID 2>/dev/null; then
             echo "❌ Emulator process died"
-            echo "Last 50 lines of log:"
             tail -50 /tmp/emulator.log
             exit 1
           fi
           
-          echo "✅ Emulator process still running"
+          echo "✅ Emulator process running"
           
-          # Wait for ADB to see device
-          echo "⏳ Waiting for ADB to detect device..."
+          echo "⏳ Waiting for ADB device..."
           DEVICE_FOUND=0
           for i in {1..50}; do
             DEVICES=$(/mnt/android-sdk/platform-tools/adb devices 2>/dev/null | grep -c "emulator")
@@ -181,16 +176,12 @@ jobs:
             echo "⚠️  Device not detected, but continuing..."
           fi
           
-          # Wait for boot - with better error handling
           echo "⏳ Waiting for Android to boot..."
           BOOT_WAIT=0
-          MAX_WAIT=180  # 3 minutes
+          MAX_WAIT=180
           
           while [ $BOOT_WAIT -lt $MAX_WAIT ]; do
-            # Try to get boot property
             BOOT_STATUS=$(/mnt/android-sdk/platform-tools/adb shell "getprop sys.boot_completed" 2>/dev/null || echo "0")
-            
-            # Clean the output
             BOOT_STATUS=$(echo "$BOOT_STATUS" | tr -d '
 ')
             
