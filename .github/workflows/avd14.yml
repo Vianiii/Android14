@@ -1,4 +1,4 @@
-name: android14-avd-final
+name: android14-avd-final-working
 
 on:
   workflow_dispatch:
@@ -19,16 +19,7 @@ jobs:
       - name: Install Packages
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y \
-            wget unzip curl net-tools git \
-            xvfb x11vnc dbus-x11 \
-            libxext6 libxrender1 libx11-6 \
-            libfreetype6 libfontconfig1 \
-            libxkbcommon0 libxkbfile1 \
-            libxcb1 libxcb-render0 libxcb-shape0 \
-            libc6 libstdc++6 libtinfo6 libncurses6 \
-            libasound2t64 mesa-utils libglu1-mesa \
-            ffmpeg adb
+          sudo apt-get install -y wget unzip curl net-tools git xvfb x11vnc dbus-x11 libxext6 libxrender1 libx11-6 libfreetype6 libfontconfig1 libxkbcommon0 libxkbfile1 libxcb1 libxcb-render0 libxcb-shape0 libc6 libstdc++6 libtinfo6 libncurses6 libasound2t64 mesa-utils libglu1-mesa ffmpeg adb
           echo "✅ Packages installed"
 
       - name: Enable KVM
@@ -82,29 +73,18 @@ jobs:
       - name: Install Android 14
         run: |
           echo "📥 Installing Android 14..."
-          /mnt/android-sdk/cmdline-tools/latest/bin/sdkmanager \
-            "platform-tools" \
-            "platforms;android-34" \
-            "build-tools;34.0.0" \
-            "emulator" \
-            "system-images;android-34;default;x86_64"
+          /mnt/android-sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "emulator" "system-images;android-34;default;x86_64"
           echo "✅ Android 14 installed"
 
       - name: Create AVD
         run: |
           echo "🔧 Creating AVD..."
-          echo "no" | /mnt/android-sdk/cmdline-tools/latest/bin/avdmanager create avd \
-            --force \
-            --name "android14" \
-            --package "system-images;android-34;default;x86_64" \
-            --device "pixel_7"
-          
+          echo "no" | /mnt/android-sdk/cmdline-tools/latest/bin/avdmanager create avd --force --name "android14" --package "system-images;android-34;default;x86_64" --device "pixel_7"
           AVD_INI="/mnt/android-avd/android14.avd/config.ini"
           sed -i '/^hw.ramSize=/d' "$AVD_INI"
           sed -i '/^disk.dataPartition.size=/d' "$AVD_INI"
           sed -i '/^hw.gpu/d' "$AVD_INI"
           sed -i '/^hw.audio/d' "$AVD_INI"
-          
           cat >> "$AVD_INI" << 'EOF'
           hw.ramSize=12288
           disk.dataPartition.size=40G
@@ -114,7 +94,6 @@ jobs:
           hw.mainKeys=no
           hw.audio=none
           EOF
-          
           echo "✅ AVD created"
 
       - name: Start Virtual Display
@@ -131,83 +110,47 @@ jobs:
           export ANDROID_SDK_ROOT=/mnt/android-sdk
           export ANDROID_AVD_HOME=/mnt/android-avd
           export LD_LIBRARY_PATH=/mnt/android-sdk/emulator/lib64:$LD_LIBRARY_PATH
-          
           echo "🚀 Starting emulator..."
-          
-          /mnt/android-sdk/emulator/emulator \
-            -avd android14 \
-            -no-snapshot-load \
-            -no-boot-anim \
-            -gpu swiftshader_indirect \
-            -no-audio \
-            -memory 12288 \
-            -partition-size 40960 \
-            -cores 4 \
-            > /tmp/emulator.log 2>&1 &
-          
+          /mnt/android-sdk/emulator/emulator -avd android14 -no-snapshot-load -no-boot-anim -gpu swiftshader_indirect -no-audio -memory 12288 -partition-size 40960 -cores 4 > /tmp/emulator.log 2>&1 &
           EMULATOR_PID=$!
           echo "Emulator PID: $EMULATOR_PID"
-          
-          echo "⏳ Waiting 20 seconds for emulator to initialize..."
           sleep 20
-          
           if ! kill -0 $EMULATOR_PID 2>/dev/null; then
-            echo "❌ Emulator process died"
+            echo "Emulator crashed"
             tail -50 /tmp/emulator.log
             exit 1
           fi
-          
-          echo "✅ Emulator process running"
-          
-          echo "⏳ Waiting for ADB device..."
+          echo "✅ Emulator running"
+          echo "⏳ Waiting for device..."
           DEVICE_FOUND=0
           for i in {1..50}; do
-            DEVICES=$(/mnt/android-sdk/platform-tools/adb devices 2>/dev/null | grep -c "emulator")
-            if [ "$DEVICES" -gt 0 ]; then
-              echo "✅ Device detected!"
+            if /mnt/android-sdk/platform-tools/adb devices 2>/dev/null | grep -q "emulator"; then
+              echo "✅ Device found"
               DEVICE_FOUND=1
               break
             fi
-            echo "  Attempt $i/50..."
             sleep 5
           done
-          
-          if [ $DEVICE_FOUND -eq 0 ]; then
-            echo "⚠️  Device not detected, but continuing..."
-          fi
-          
-          echo "⏳ Waiting for Android to boot..."
+          echo "⏳ Waiting for boot..."
           BOOT_WAIT=0
-          MAX_WAIT=180
-          
-          while [ $BOOT_WAIT -lt $MAX_WAIT ]; do
+          while [ $BOOT_WAIT -lt 180 ]; do
             BOOT_STATUS=$(/mnt/android-sdk/platform-tools/adb shell "getprop sys.boot_completed" 2>/dev/null || echo "0")
-            BOOT_STATUS=$(echo "$BOOT_STATUS" | tr -d '
-')
-            
-            if [ "$BOOT_STATUS" = "1" ]; then
-              echo "✅ Android fully booted!"
+            if echo "$BOOT_STATUS" | grep -q "1"; then
+              echo "✅ Boot complete"
               break
             fi
-            
             if [ $((BOOT_WAIT % 30)) -eq 0 ]; then
-              echo "  Booting... ($BOOT_WAIT/$MAX_WAIT seconds)"
+              echo "Booting... $BOOT_WAIT seconds"
             fi
-            
             sleep 5
             BOOT_WAIT=$((BOOT_WAIT + 5))
           done
-          
-          echo ""
-          echo "📊 Device status:"
-          /mnt/android-sdk/platform-tools/adb devices || true
-          echo ""
-          echo "✅ Emulator ready!"
+          echo "✅ Emulator ready"
 
       - name: Start VNC Server
         run: |
           export DISPLAY=:1
-          echo "🔌 Starting VNC on port 5900..."
+          echo "🔌 Starting VNC..."
           x11vnc -display :1 -forever -nopw -rfbport 5900 -shared -bg -xkb
           sleep 2
           echo "✅ VNC started"
@@ -215,11 +158,10 @@ jobs:
       - name: Setup FRP Tunnel
         run: |
           cd /tmp
-          echo "🌐 Setting up FRP tunnel..."
+          echo "🌐 Setting up FRP..."
           wget -q https://github.com/fatedier/frp/releases/download/v0.65.0/frp_0.65.0_linux_amd64.tar.gz
           tar -xzf frp_0.65.0_linux_amd64.tar.gz
-          
-          cat > frpc.toml << 'EOF'
+          cat > frpc.toml << 'FRPEOF'
           serverAddr = "159.195.6.61"
           serverPort = 7000
           
@@ -229,8 +171,7 @@ jobs:
           localIP = "127.0.0.1"
           localPort = 5900
           remotePort = 5900
-          EOF
-          
+          FRPEOF
           nohup ./frp_0.65.0_linux_amd64/frpc -c frpc.toml > /tmp/frpc.log 2>&1 &
           sleep 3
           echo "✅ FRP tunnel ready"
@@ -245,18 +186,11 @@ jobs:
       - name: Connection Info
         run: |
           echo ""
-          echo "╔═══════════════════════════════════════════════════════╗"
-          echo "║       ✅ ANDROID 14 AVD READY!                       ║"
-          echo "╚═══════════════════════════════════════════════════════╝"
-          echo ""
-          echo "🌐 ACCESS IN BROWSER"
-          echo "   http://159.195.6.61"
-          echo ""
-          echo "📱 Device: Android 14 (Pixel 7)"
-          echo "   RAM: 12GB | Storage: 40GB"
-          echo ""
+          echo "✅ ANDROID 14 AVD READY"
+          echo "========================"
+          echo "🌐 Browser: http://159.195.6.61"
+          echo "📱 Device: Android 14 (Pixel 7, 12GB RAM, 40GB Storage)"
           echo "🔐 SSH: See tmate connection above"
-          echo ""
           echo "⏱️  Duration: ${{ github.event.inputs.duration || '6' }} hours"
           echo ""
 
@@ -264,29 +198,12 @@ jobs:
         run: |
           HOURS=${{ github.event.inputs.duration || '6' }}
           MINUTES=$((HOURS * 60))
-          
-          echo "🔄 Running for $HOURS hours..."
-          
+          echo "Running for $HOURS hours..."
           for ((i=0; i<MINUTES; i++)); do
             sleep 60
-            
             if [ $((i % 10)) -eq 0 ]; then
               STATE=$(/mnt/android-sdk/platform-tools/adb get-state 2>/dev/null || echo "offline")
               echo "[$i min] State: $STATE"
-            fi
-            
-            if ! /mnt/android-sdk/platform-tools/adb get-state > /dev/null 2>&1; then
-              echo "⚠️  Restarting at $i min..."
-              export DISPLAY=:1
-              export LD_LIBRARY_PATH=/mnt/android-sdk/emulator/lib64:$LD_LIBRARY_PATH
-              /mnt/android-sdk/emulator/emulator \
-                -avd android14 \
-                -no-snapshot-load \
-                -gpu swiftshader_indirect \
-                -memory 12288 \
-                -partition-size 40960 \
-                > /tmp/emulator.log 2>&1 &
-              sleep 60
             fi
           done
 
