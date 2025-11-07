@@ -72,14 +72,14 @@ jobs:
 
       - name: Install Android 14
         run: |
-          echo "📥 Installing Android 14..."
-          /mnt/android-sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "emulator" "system-images;android-34;default;x86_64"
+          echo "📥 Installing Android 14 with Play Store..."
+          /mnt/android-sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "emulator" "system-images;android-34;google_play;x86_64"
           echo "✅ Android 14 installed"
 
       - name: Create AVD
         run: |
           echo "🔧 Creating AVD..."
-          echo "no" | /mnt/android-sdk/cmdline-tools/latest/bin/avdmanager create avd --force --name "android14" --package "system-images;android-34;default;x86_64" --device "pixel_7"
+          echo "no" | /mnt/android-sdk/cmdline-tools/latest/bin/avdmanager create avd --force --name "android14" --package "system-images;android-34;google_play;x86_64" --device "pixel_7"
           AVD_INI="/mnt/android-avd/android14.avd/config.ini"
           sed -i '/^hw.ramSize=/d' "$AVD_INI"
           sed -i '/^disk.dataPartition.size=/d' "$AVD_INI"
