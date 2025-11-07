@@ -1,4 +1,4 @@
-name: android14-avd-scrcpy-browser
+name: android14-avd-complete
 
 on:
   workflow_dispatch:
@@ -16,23 +16,46 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Packages
+      # ============================================================
+      # FIX: Install correct packages for Ubuntu 22.04
+      # ============================================================
+      - name: Install Packages (Ubuntu 22.04 Compatible)
         run: |
           sudo apt-get update -qq
+          
+          # Core tools
           sudo apt-get install -y \
-            wget unzip curl net-tools \
-            xvfb x11vnc dbus-x11 \
-            libpulse0 libasound2 libglib2.0-0 \
+            wget unzip curl net-tools git
+          
+          # Display server
+          sudo apt-get install -y \
+            xvfb x11vnc dbus-x11
+          
+          # Graphics libraries (FIXED for Ubuntu 22.04)
+          sudo apt-get install -y \
             libxext6 libxrender1 libx11-6 \
             libfreetype6 libfontconfig1 \
-            libgl1-mesa-glx libxkbcommon0 \
-            libtinfo6 libncurses6 libc6 libstdc++6 \
+            libxkbcommon0 libxkbfile1 \
             libxcb1 libxcb-render0 libxcb-shape0 \
-            libxkbfile1 libxext-dev libxrender-dev \
-            vulkan-tools libvulkan1 \
-            scrcpy adb ffmpeg
+            libc6 libstdc++6 libtinfo6 libncurses6
           
-          echo "✅ All packages installed (including scrcpy)"
+          # Audio (FIXED for Ubuntu 22.04)
+          sudo apt-get install -y \
+            libasound2t64 || sudo apt-get install -y libasound2 || true
+          
+          # Mesa graphics (FIXED)
+          sudo apt-get install -y \
+            mesa-utils libglu1-mesa || true
+          
+          # Standard libraries
+          sudo apt-get install -y \
+            libglib2.0-0 || true
+          
+          # Stream tools
+          sudo apt-get install -y \
+            ffmpeg adb
+          
+          echo "✅ All packages installed"
 
       - name: Enable KVM
         run: |
@@ -48,7 +71,6 @@ jobs:
           sudo mkdir -p /mnt/android-sdk /mnt/android-avd
           sudo chown -R $(whoami):$(whoami) /mnt/android-sdk /mnt/android-avd
           chmod -R 755 /mnt/android-sdk /mnt/android-avd
-          df -h /mnt
           echo "✅ /mnt ready"
 
       - name: Set Environment
@@ -150,7 +172,7 @@ jobs:
           
           sleep 15
           
-          echo "⏳ Waiting for device..."
+          echo "⏳ Waiting for device (5 min max)..."
           for i in {1..40}; do
             if /mnt/android-sdk/platform-tools/adb devices 2>/dev/null | grep -q "emulator"; then
               echo "✅ Device found!"
@@ -159,7 +181,7 @@ jobs:
             sleep 5
           done
           
-          echo "⏳ Waiting for boot..."
+          echo "⏳ Waiting for boot (5 min max)..."
           for i in {1..60}; do
             BOOT=$(/mnt/android-sdk/platform-tools/adb shell "getprop sys.boot_completed" 2>/dev/null)
             if [ "$BOOT" = "1" ]; then
@@ -169,29 +191,24 @@ jobs:
             sleep 5
           done
           
-          echo ""
           /mnt/android-sdk/platform-tools/adb devices
-          echo "✅ Ready!"
+          echo "✅ Emulator ready!"
 
-      - name: Start Scrcpy Stream
+      - name: Start VNC Server
         run: |
           export DISPLAY=:1
-          
-          echo "📱 Starting scrcpy stream..."
-          
-          # Start scrcpy in TCP server mode (listens on port 8888)
-          nohup scrcpy --tcpip=127.0.0.1 --port 8888 > /tmp/scrcpy.log 2>&1 &
-          
-          sleep 5
-          echo "✅ Scrcpy streaming on port 8888"
+          echo "🔌 Starting VNC on port 5900..."
+          x11vnc -display :1 -forever -nopw -rfbport 5900 -shared -bg -xkb
+          sleep 2
+          echo "✅ VNC ready"
 
-      - name: Setup FRP Tunnel
+      - name: Setup FRP Tunnel to VPS
         run: |
           cd /tmp
+          echo "🌐 Setting up FRP tunnel..."
           wget -q https://github.com/fatedier/frp/releases/download/v0.65.0/frp_0.65.0_linux_amd64.tar.gz
           tar -xzf frp_0.65.0_linux_amd64.tar.gz
           
-          # Expose both VNC (5900) and Scrcpy (8888)
           cat > frpc.toml << 'EOF'
           serverAddr = "159.195.6.61"
           serverPort = 7000
@@ -202,18 +219,11 @@ jobs:
           localIP = "127.0.0.1"
           localPort = 5900
           remotePort = 5900
-          
-          [[proxies]]
-          name = "scrcpy-stream"
-          type = "tcp"
-          localIP = "127.0.0.1"
-          localPort = 8888
-          remotePort = 8888
           EOF
           
           nohup ./frp_0.65.0_linux_amd64/frpc -c frpc.toml > /tmp/frpc.log 2>&1 &
           sleep 3
-          echo "✅ FRP tunnel ready (VNC:5900 + Scrcpy:8888)"
+          echo "✅ FRP tunnel ready (5900 → VPS)"
 
       - name: Setup tmate SSH
         uses: mxschmitt/action-tmate@v3
@@ -226,54 +236,18 @@ jobs:
         run: |
           echo ""
           echo "╔═══════════════════════════════════════════════════════╗"
-          echo "║     ✅ ANDROID 14 AVD - ugPhone-like Experience!    ║"
+          echo "║       ✅ ANDROID 14 AVD READY!                       ║"
           echo "╚═══════════════════════════════════════════════════════╝"
           echo ""
-          echo "📱 ACCESS METHODS"
+          echo "🌐 ACCESS IN BROWSER"
+          echo "   http://159.195.6.61"
           echo ""
-          echo "1️⃣  SCRCPY (Recommended - Like ugPhone)"
-          echo "   Install Scrcpy on your PC:"
-          echo "   • Windows: choco install scrcpy"
-          echo "   • Mac: brew install scrcpy"
-          echo "   • Linux: sudo apt install scrcpy"
+          echo "📱 Device: Android 14 (Pixel 7)"
+          echo "   RAM: 12GB | Storage: 40GB"
           echo ""
-          echo "   Then connect:"
-          echo "   scrcpy --tcpip=159.195.6.61 --port 8888"
+          echo "🔐 SSH: See tmate connection above"
           echo ""
-          echo "   Features:"
-          echo "   ✓ Full touch support (like real phone)"
-          echo "   ✓ Drag & drop files"
-          echo "   ✓ Copy-paste between PC and AVD"
-          echo "   ✓ Keyboard input"
-          echo "   ✓ Fullscreen mode"
-          echo "   ✓ Best latency"
-          echo ""
-          echo "2️⃣  BROWSER (via VPS)"
-          echo "   Install on VPS (159.195.6.61):"
-          echo "   sudo apt install novnc websockify"
-          echo "   mkdir -p ~/novnc && cd ~/novnc"
-          echo "   git clone https://github.com/novnc/noVNC.git"
-          echo "   nohup ~/noVNC/utils/websockify 6080 localhost:5900 --web ~/noVNC &"
-          echo ""
-          echo "   Then access: http://159.195.6.61:6080/vnc.html"
-          echo ""
-          echo "3️⃣  SSH TERMINAL (Rooting, ADB commands)"
-          echo "   See tmate connection in logs above"
-          echo ""
-          echo "💾 DEVICE SPECS"
-          echo "   • Android: 14 (API 34)"
-          echo "   • Type: AOSP (No Play Store)"
-          echo "   • RAM: 12GB"
-          echo "   • Storage: 40GB"
-          echo "   • Device: Pixel 7"
-          echo ""
-          echo "⏱️  DURATION: ${{ github.event.inputs.duration || '6' }} hours"
-          echo ""
-          echo "🔧 ROOT WITH rootAVD (via SSH):"
-          echo "   export DISPLAY=:1"
-          echo "   cd /tmp && git clone https://github.com/newbit1/rootAVD.git"
-          echo "   cd rootAVD && chmod +x rootAVD.sh && ./rootAVD.sh"
-          echo "   adb reboot"
+          echo "⏱️  Duration: ${{ github.event.inputs.duration || '6' }} hours"
           echo ""
 
       - name: Keep Alive
@@ -292,7 +266,7 @@ jobs:
             fi
             
             if ! /mnt/android-sdk/platform-tools/adb get-state > /dev/null 2>&1; then
-              echo "⚠️  Restarting at $i min"
+              echo "⚠️  Restarting at $i min..."
               export DISPLAY=:1
               export LD_LIBRARY_PATH=/mnt/android-sdk/emulator/lib64:$LD_LIBRARY_PATH
               /mnt/android-sdk/emulator/emulator \
@@ -306,16 +280,8 @@ jobs:
             fi
           done
 
-      - name: Upload Logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: avd-logs
-          path: /tmp/
-          retention-days: 7
-
       - name: Cleanup
         if: always()
         run: |
-          killall -9 emulator x11vnc Xvfb frpc scrcpy 2>/dev/null || true
+          killall -9 emulator x11vnc Xvfb frpc 2>/dev/null || true
           echo "✅ Done"
