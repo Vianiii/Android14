@@ -19,7 +19,7 @@ jobs:
       - name: Install Required Packages
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y wget unzip curl
+          sudo apt-get install -y wget unzip curl net-tools
           echo "✅ Base packages installed"
 
       - name: Check Storage
@@ -29,8 +29,6 @@ jobs:
           df -h / | tail -1
           echo "Mount (/mnt):"
           df -h /mnt | tail -1
-          echo ""
-          echo "Total: 146GB available"
 
       - name: Enable KVM
         run: |
@@ -49,7 +47,7 @@ jobs:
           sudo mkdir -p /mnt/avd-data
           sudo chown -R $(whoami):$(whoami) /mnt/android-sdk /mnt/android-avd /mnt/avd-data
           chmod -R 755 /mnt/android-sdk /mnt/android-avd /mnt/avd-data
-          echo "✅ /mnt directories created (74GB available)"
+          echo "✅ /mnt directories created"
 
       - name: Setup Android Environment Variables
         run: |
@@ -58,27 +56,18 @@ jobs:
           ANDROID_HOME=/mnt/android-sdk
           ANDROID_AVD_HOME=/mnt/android-avd
           ANDROID_EMULATOR_HOME=/mnt/android-avd
-          ANDROID_PREFS_ROOT=/mnt/android-sdk/.android
-          PATH=/mnt/android-sdk/cmdline-tools/latest/bin:/mnt/android-sdk/emulator:/mnt/android-sdk/platform-tools:$PATH
+          PATH=/mnt/android-sdk/cmdline-tools/latest/bin:/mnt/android-sdk/emulator:/mnt/android-sdk/platform-tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
           EOF
-          
-          echo "export ANDROID_SDK_ROOT=/mnt/android-sdk" >> ~/.bashrc
-          echo "export ANDROID_HOME=/mnt/android-sdk" >> ~/.bashrc
-          echo "export ANDROID_AVD_HOME=/mnt/android-avd" >> ~/.bashrc
-          echo "export ANDROID_EMULATOR_HOME=/mnt/android-avd" >> ~/.bashrc
-          echo "export PATH=/mnt/android-sdk/cmdline-tools/latest/bin:/mnt/android-sdk/emulator:/mnt/android-sdk/platform-tools:$PATH" >> ~/.bashrc
-          
-          echo "✅ Android environment variables set"
+          echo "✅ Environment variables set"
 
       - name: Install Android SDK Command-line Tools
         run: |
           cd /mnt/android-sdk
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q commandlinetools-linux-11076708_latest.zip
+          /usr/bin/wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          /usr/bin/unzip -q commandlinetools-linux-11076708_latest.zip
           mkdir -p cmdline-tools/latest
           mv cmdline-tools/* cmdline-tools/latest/ 2>/dev/null || true
           rm commandlinetools-linux-11076708_latest.zip
-          
           echo "✅ SDK command-line tools installed"
 
       - name: Accept SDK Licenses
@@ -86,9 +75,9 @@ jobs:
           yes | /mnt/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
           echo "✅ SDK licenses accepted"
 
-      - name: Install Android 14 System Image (No Play Store)
+      - name: Install Android 14 System Image
         run: |
-          echo "📥 Installing Android 14 AOSP system image..."
+          echo "📥 Installing Android 14 AOSP (no Play Store)..."
           /mnt/android-sdk/cmdline-tools/latest/bin/sdkmanager \
             "platform-tools" \
             "platforms;android-34" \
@@ -96,14 +85,13 @@ jobs:
             "emulator" \
             "system-images;android-34;default;x86_64"
           
-          echo "✅ Android 14 (AOSP, no Play Store) installed"
           echo ""
-          echo "📦 Installed packages:"
+          echo "✅ Installed packages:"
           /mnt/android-sdk/cmdline-tools/latest/bin/sdkmanager --list_installed
 
       - name: Create AVD with 12GB RAM and 40GB Storage
         run: |
-          echo "🔧 Creating Android 14 AVD..."
+          echo "🔧 Creating AVD..."
           
           echo "no" | /mnt/android-sdk/cmdline-tools/latest/bin/avdmanager create avd \
             --force \
@@ -113,66 +101,51 @@ jobs:
           
           AVD_CONFIG="/mnt/android-avd/android14_custom.avd/config.ini"
           
-          # Set 12GB RAM
+          # 12GB RAM
           sed -i 's/hw.ramSize=.*/hw.ramSize=12288/' "$AVD_CONFIG"
-          sed -i 's/vm.heapSize=.*/vm.heapSize=512/' "$AVD_CONFIG"
           
-          # Set 40GB storage
-          echo "disk.dataPartition.size=40G" >> "$AVD_CONFIG"
+          # Additional settings
+          cat >> "$AVD_CONFIG" << 'EOF'
+          disk.dataPartition.size=40G
+          hw.gpu.enabled=yes
+          hw.gpu.mode=swiftshader_indirect
+          hw.keyboard=yes
+          hw.mainKeys=no
+          vm.heapSize=512
+          EOF
           
-          # GPU and hardware acceleration
-          echo "hw.gpu.enabled=yes" >> "$AVD_CONFIG"
-          echo "hw.gpu.mode=swiftshader_indirect" >> "$AVD_CONFIG"
-          echo "hw.keyboard=yes" >> "$AVD_CONFIG"
-          echo "hw.mainKeys=no" >> "$AVD_CONFIG"
-          
-          echo ""
-          echo "✅ AVD Created:"
-          echo "  RAM: 12GB"
-          echo "  Storage: 40GB"
-          echo "  Android: 14 (API 34, AOSP)"
+          echo "✅ AVD created: 12GB RAM, 40GB storage"
 
-      - name: Install VNC Server & Desktop
+      - name: Install VNC & Desktop
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            xvfb \
-            x11vnc \
-            openbox \
-            dbus-x11 \
-            xterm \
-            net-tools
-          
-          echo "✅ VNC server installed"
+            xvfb x11vnc openbox dbus-x11 xterm
+          echo "✅ VNC installed"
 
-      - name: Start Xvfb & X11 Session
+      - name: Start Display & VNC
         run: |
+          # Start Xvfb
           Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset > /tmp/xvfb.log 2>&1 &
           sleep 3
           
           export DISPLAY=:99
           echo "DISPLAY=:99" >> $GITHUB_ENV
           
-          openbox --config-file /dev/null > /tmp/openbox.log 2>&1 &
+          # Start window manager
+          openbox > /tmp/openbox.log 2>&1 &
           sleep 2
           
-          echo "✅ X11 display started on :99"
-
-      - name: Start VNC Server on Port 5900
-        run: |
-          export DISPLAY=:99
+          # Start VNC
           x11vnc -display :99 -forever -nopw -rfbport 5900 -shared -bg -xkb
           sleep 2
           
           if netstat -tuln | grep -q ':5900'; then
-            echo "✅ VNC server running on port 5900"
-          else
-            echo "❌ VNC server failed to start"
-            exit 1
+            echo "✅ VNC running on :5900"
           fi
 
-      - name: Setup FRP Tunnel for VNC
+      - name: Setup FRP Tunnel
         run: |
-          wget -q https://github.com/fatedier/frp/releases/download/v0.65.0/frp_0.65.0_linux_amd64.tar.gz
+          /usr/bin/wget -q https://github.com/fatedier/frp/releases/download/v0.65.0/frp_0.65.0_linux_amd64.tar.gz
           tar -xzf frp_0.65.0_linux_amd64.tar.gz
           
           cat > frpc.toml << 'EOF'
@@ -189,21 +162,13 @@ jobs:
           
           nohup ./frp_0.65.0_linux_amd64/frpc -c frpc.toml > frpc.log 2>&1 &
           sleep 3
-          
-          if ps aux | grep -v grep | grep -q frpc; then
-            echo "✅ FRP tunnel active: 159.195.6.61:5900"
-          else
-            echo "⚠️  FRP may not be connected, check logs"
-            cat frpc.log
-          fi
+          echo "✅ FRP tunnel: 159.195.6.61:5900"
 
       - name: Start Android Emulator
         run: |
           export DISPLAY=:99
-          export ANDROID_SDK_ROOT=/mnt/android-sdk
-          export ANDROID_AVD_HOME=/mnt/android-avd
           
-          echo "🚀 Starting Android 14 emulator..."
+          echo "🚀 Starting emulator..."
           
           /mnt/android-sdk/emulator/emulator \
             -avd android14_custom \
@@ -216,139 +181,96 @@ jobs:
             -memory 12288 \
             -partition-size 40960 \
             -cores 4 \
-            -verbose \
             > /tmp/emulator.log 2>&1 &
           
-          EMULATOR_PID=$!
-          echo "EMULATOR_PID=$EMULATOR_PID" >> $GITHUB_ENV
-          echo "Emulator PID: $EMULATOR_PID"
+          echo "⏳ Waiting for boot..."
           
-          echo "⏳ Waiting for emulator to boot (this may take 3-5 minutes)..."
-          
-          # Wait for ADB to detect device
-          timeout 300 bash -c '
-          until /mnt/android-sdk/platform-tools/adb devices | grep -q "emulator"; do
-            echo "  Waiting for device..."
+          # Wait for device
+          for i in {1..60}; do
+            if /mnt/android-sdk/platform-tools/adb devices | grep -q "emulator"; then
+              echo "Device detected!"
+              break
+            fi
             sleep 5
           done
-          '
           
-          # Wait for boot to complete
-          timeout 600 bash -c '
-          until /mnt/android-sdk/platform-tools/adb shell "getprop sys.boot_completed" 2>/dev/null | grep -q "1"; do
-            echo "  Booting..."
-            sleep 10
+          # Wait for boot complete
+          for i in {1..120}; do
+            if /mnt/android-sdk/platform-tools/adb shell "getprop sys.boot_completed" 2>/dev/null | grep -q "1"; then
+              echo "✅ Boot complete!"
+              break
+            fi
+            sleep 5
           done
-          '
           
-          if /mnt/android-sdk/platform-tools/adb shell "getprop sys.boot_completed" 2>/dev/null | grep -q "1"; then
-            echo ""
-            echo "✅ Emulator fully booted!"
-            echo ""
-            echo "📱 Device Info:"
-            /mnt/android-sdk/platform-tools/adb devices
-            /mnt/android-sdk/platform-tools/adb shell getprop ro.build.version.release
-            /mnt/android-sdk/platform-tools/adb shell getprop ro.product.model
-            /mnt/android-sdk/platform-tools/adb shell df -h /data
-          else
-            echo "⚠️  Emulator boot timeout, but continuing..."
-            echo "Last 50 lines of emulator log:"
-            tail -50 /tmp/emulator.log
-          fi
+          echo ""
+          echo "📱 Emulator Status:"
+          /mnt/android-sdk/platform-tools/adb devices
+          /mnt/android-sdk/platform-tools/adb shell getprop ro.build.version.release 2>/dev/null || echo "Android version check failed"
+          /mnt/android-sdk/platform-tools/adb shell df -h /data 2>/dev/null || echo "Storage check failed"
 
-      - name: Setup tmate SSH Session
+      - name: Setup tmate SSH
         uses: mxschmitt/action-tmate@v3
         with:
           detached: true
           limit-access-to-actor: false
         timeout-minutes: 5
 
-      - name: Connection Info & Instructions
+      - name: Connection Info
         run: |
           echo ""
-          echo "=========================================================="
-          echo "✅ ANDROID 14 AVD READY WITH VNC + SSH ACCESS!"
-          echo "=========================================================="
+          echo "=========================================="
+          echo "✅ ANDROID 14 AVD READY!"
+          echo "=========================================="
           echo ""
-          echo "📱 AVD Details:"
-          echo "  - Android Version: 14 (API 34)"
-          echo "  - Type: AOSP (No Play Store)"
-          echo "  - RAM: 12GB"
-          echo "  - Storage: 40GB (on /mnt)"
-          echo "  - Device: Pixel 7"
+          echo "🖥️  VNC: 159.195.6.61:5900"
+          echo "📱 Android: 14 (API 34, AOSP)"
+          echo "💾 RAM: 12GB | Storage: 40GB"
           echo ""
-          echo "🖥️  VNC Access:"
-          echo "  - Address: 159.195.6.61:5900"
-          echo "  - No password"
+          echo "🔐 SSH: Check tmate output above"
           echo ""
-          echo "🔐 SSH Access:"
-          echo "  - Check tmate connection above in logs"
-          echo ""
-          echo "📋 Useful Commands (via SSH):"
-          echo "  adb devices              # Check emulator status"
-          echo "  adb reboot               # Restart emulator"
-          echo "  adb emu kill             # Stop emulator"
-          echo "  adb shell                # Shell into Android"
-          echo ""
-          echo "  # Start emulator manually:"
+          echo "📋 Commands (via SSH):"
           echo "  export DISPLAY=:99"
-          echo "  cd /mnt/android-sdk/emulator"
-          echo "  ./emulator -avd android14_custom -no-snapshot-load -gpu swiftshader_indirect &"
+          echo "  /mnt/android-sdk/platform-tools/adb devices"
+          echo "  /mnt/android-sdk/platform-tools/adb shell"
+          echo "  /mnt/android-sdk/platform-tools/adb reboot"
           echo ""
           echo "  # Root with rootAVD:"
           echo "  cd /mnt/avd-data"
           echo "  git clone https://github.com/newbit1/rootAVD.git"
-          echo "  cd rootAVD"
-          echo "  ./rootAVD.sh"
+          echo "  cd rootAVD && ./rootAVD.sh"
           echo ""
-          echo "⏱️  Duration: ${{ github.event.inputs.duration || '6' }} hours"
-          echo "=========================================================="
+          echo "  # Restart emulator:"
+          echo "  /mnt/android-sdk/platform-tools/adb emu kill"
+          echo "  /mnt/android-sdk/emulator/emulator -avd android14_custom -no-snapshot-load &"
+          echo ""
+          echo "⏱️  Duration: ${{ github.event.inputs.duration }} hours"
+          echo "=========================================="
 
-      - name: Keep Alive & Monitor
+      - name: Keep Alive
         run: |
-          DURATION=${{ github.event.inputs.duration || '6' }}
-          SECONDS=$((DURATION * 3600))
+          HOURS=${{ github.event.inputs.duration }}
+          MINUTES=$((HOURS * 60))
           
-          echo "🔄 Monitoring for $DURATION hours..."
-          echo ""
+          echo "🔄 Running for $HOURS hours..."
           
-          for ((i=0; i<$((SECONDS/60)); i++)); do
+          for ((i=0; i<MINUTES; i++)); do
             sleep 60
             
-            # Check statuses
-            if /mnt/android-sdk/platform-tools/adb get-state > /dev/null 2>&1; then
-              AVD_STATUS="✅"
-            else
-              AVD_STATUS="❌"
-            fi
-            
-            if netstat -tuln | grep -q ':5900'; then
-              VNC_STATUS="✅"
-            else
-              VNC_STATUS="❌"
-            fi
-            
-            if ps aux | grep -v grep | grep -q frpc; then
-              FRP_STATUS="✅"
-            else
-              FRP_STATUS="❌"
-            fi
-            
-            # Log every 10 minutes
             if [ $((i % 10)) -eq 0 ]; then
-              echo "[$((i)) min] AVD:$AVD_STATUS VNC:$VNC_STATUS FRP:$FRP_STATUS"
+              AVD=$(/mnt/android-sdk/platform-tools/adb get-state 2>/dev/null || echo "offline")
+              VNC=$(netstat -tuln | grep -q ':5900' && echo "✅" || echo "❌")
+              echo "[$i min] AVD:$AVD VNC:$VNC"
             fi
             
-            # Auto-restart emulator if crashed
+            # Auto-restart if crashed
             if ! /mnt/android-sdk/platform-tools/adb get-state > /dev/null 2>&1; then
-              echo "⚠️  Emulator stopped at $((i)) min, restarting..."
+              echo "⚠️  Restarting emulator..."
               export DISPLAY=:99
-              /mnt/android-sdk/emulator/emulator -avd android14_custom -no-snapshot-load -gpu swiftshader_indirect -no-audio -partition-size 40960 > /tmp/emulator.log 2>&1 &
+              /mnt/android-sdk/emulator/emulator -avd android14_custom -no-snapshot-load -gpu swiftshader_indirect -memory 12288 -partition-size 40960 > /tmp/emulator.log 2>&1 &
               sleep 60
             fi
           done
-          
-          echo "⏰ Session ended after $DURATION hours"
 
       - name: Upload Logs
         if: always()
@@ -365,10 +287,6 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          echo "🧹 Cleaning up..."
           /mnt/android-sdk/platform-tools/adb emu kill 2>/dev/null || true
-          killall -9 emulator 2>/dev/null || true
-          killall -9 x11vnc 2>/dev/null || true
-          killall -9 Xvfb 2>/dev/null || true
-          killall -9 frpc 2>/dev/null || true
-          echo "✅ Cleanup complete"
+          killall -9 emulator x11vnc Xvfb frpc 2>/dev/null || true
+          echo "✅ Cleanup done"
