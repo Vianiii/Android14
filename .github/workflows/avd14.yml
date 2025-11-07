@@ -1,4 +1,4 @@
-name: android14-avd-vnc-fixed
+name: android14-avd-scrcpy-browser
 
 on:
   workflow_dispatch:
@@ -19,8 +19,20 @@ jobs:
       - name: Install Packages
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y wget unzip curl net-tools
-          echo "✅ Packages ready"
+          sudo apt-get install -y \
+            wget unzip curl net-tools \
+            xvfb x11vnc dbus-x11 \
+            libpulse0 libasound2 libglib2.0-0 \
+            libxext6 libxrender1 libx11-6 \
+            libfreetype6 libfontconfig1 \
+            libgl1-mesa-glx libxkbcommon0 \
+            libtinfo6 libncurses6 libc6 libstdc++6 \
+            libxcb1 libxcb-render0 libxcb-shape0 \
+            libxkbfile1 libxext-dev libxrender-dev \
+            vulkan-tools libvulkan1 \
+            scrcpy adb ffmpeg
+          
+          echo "✅ All packages installed (including scrcpy)"
 
       - name: Enable KVM
         run: |
@@ -37,7 +49,7 @@ jobs:
           sudo chown -R $(whoami):$(whoami) /mnt/android-sdk /mnt/android-avd
           chmod -R 755 /mnt/android-sdk /mnt/android-avd
           df -h /mnt
-          echo "✅ /mnt ready (74GB)"
+          echo "✅ /mnt ready"
 
       - name: Set Environment
         run: |
@@ -46,38 +58,32 @@ jobs:
           ANDROID_HOME=/mnt/android-sdk
           ANDROID_AVD_HOME=/mnt/android-avd
           PATH=/mnt/android-sdk/cmdline-tools/latest/bin:/mnt/android-sdk/emulator:/mnt/android-sdk/platform-tools:/usr/bin:/bin
+          LD_LIBRARY_PATH=/mnt/android-sdk/emulator/lib64:$LD_LIBRARY_PATH
+          LIBGL_ALWAYS_INDIRECT=1
           EOF
           echo "✅ Environment set"
 
-      - name: Install Android SDK Tools (Fixed)
+      - name: Install Android SDK
         run: |
           echo "📥 Downloading SDK..."
           cd /mnt/android-sdk
-          
-          # Download
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          
-          # Extract to temp location
           mkdir -p temp_extract
           cd temp_extract
           unzip -q ../commandlinetools-linux-11076708_latest.zip
-          
-          # Move correctly
           cd /mnt/android-sdk
           mkdir -p cmdline-tools/latest
           mv temp_extract/cmdline-tools/* cmdline-tools/latest/
           rm -rf temp_extract
           rm commandlinetools-linux-11076708_latest.zip
-          
           echo "✅ SDK tools installed"
-          ls -la /mnt/android-sdk/cmdline-tools/latest/bin/ | head -3
 
-      - name: Accept SDK Licenses
+      - name: Accept Licenses
         run: |
           yes | /mnt/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
           echo "✅ Licenses accepted"
 
-      - name: Install Android 14 Components
+      - name: Install Android 14
         run: |
           echo "📥 Installing Android 14..."
           /mnt/android-sdk/cmdline-tools/latest/bin/sdkmanager \
@@ -86,9 +92,9 @@ jobs:
             "build-tools;34.0.0" \
             "emulator" \
             "system-images;android-34;default;x86_64"
-          echo "✅ Android 14 components installed"
+          echo "✅ Android 14 installed"
 
-      - name: Create AVD
+      - name: Create AVD (12GB RAM, 40GB Storage)
         run: |
           echo "🔧 Creating AVD..."
           echo "no" | /mnt/android-sdk/cmdline-tools/latest/bin/avdmanager create avd \
@@ -98,14 +104,11 @@ jobs:
             --device "pixel_7"
           
           AVD_INI="/mnt/android-avd/android14.avd/config.ini"
-          
-          # Remove old values if exist
           sed -i '/^hw.ramSize=/d' "$AVD_INI"
           sed -i '/^disk.dataPartition.size=/d' "$AVD_INI"
-          sed -i '/^hw.gpu.enabled=/d' "$AVD_INI"
-          sed -i '/^hw.gpu.mode=/d' "$AVD_INI"
+          sed -i '/^hw.gpu/d' "$AVD_INI"
+          sed -i '/^hw.audio/d' "$AVD_INI"
           
-          # Add new values
           cat >> "$AVD_INI" << 'EOF'
           hw.ramSize=12288
           disk.dataPartition.size=40G
@@ -113,17 +116,10 @@ jobs:
           hw.gpu.mode=swiftshader_indirect
           hw.keyboard=yes
           hw.mainKeys=no
+          hw.audio=none
           EOF
           
-          echo "✅ AVD created (12GB RAM, 40GB storage)"
-          echo ""
-          echo "AVD Config:"
-          tail -10 "$AVD_INI"
-
-      - name: Install VNC Server
-        run: |
-          sudo apt-get install -y xvfb x11vnc dbus-x11 > /dev/null 2>&1
-          echo "✅ VNC installed"
+          echo "✅ AVD created"
 
       - name: Start Virtual Display
         run: |
@@ -131,49 +127,14 @@ jobs:
           sleep 3
           export DISPLAY=:1
           echo "DISPLAY=:1" >> $GITHUB_ENV
-          echo "✅ Display :1 started"
+          echo "✅ Display started"
 
-      - name: Start VNC Server
+      - name: Start Emulator
         run: |
           export DISPLAY=:1
-          x11vnc -display :1 -forever -nopw -rfbport 5900 -shared -bg -xkb
-          sleep 2
-          
-          if netstat -tuln | grep -q ':5900'; then
-            echo "✅ VNC running on port 5900"
-          else
-            echo "❌ VNC failed"
-            exit 1
-          fi
-
-      - name: Setup FRP Tunnel
-        run: |
-          cd /tmp
-          wget -q https://github.com/fatedier/frp/releases/download/v0.65.0/frp_0.65.0_linux_amd64.tar.gz
-          tar -xzf frp_0.65.0_linux_amd64.tar.gz
-          
-          cat > frpc.toml << 'EOF'
-          serverAddr = "159.195.6.61"
-          serverPort = 7000
-          
-          [[proxies]]
-          name = "vnc-avd"
-          type = "tcp"
-          localIP = "127.0.0.1"
-          localPort = 5900
-          remotePort = 5900
-          EOF
-          
-          nohup ./frp_0.65.0_linux_amd64/frpc -c frpc.toml > /tmp/frpc.log 2>&1 &
-          sleep 3
-          
-          if ps aux | grep -v grep | grep -q frpc; then
-            echo "✅ FRP tunnel ready"
-          fi
-
-      - name: Start Android Emulator
-        run: |
-          export DISPLAY=:1
+          export ANDROID_SDK_ROOT=/mnt/android-sdk
+          export ANDROID_AVD_HOME=/mnt/android-avd
+          export LD_LIBRARY_PATH=/mnt/android-sdk/emulator/lib64:$LD_LIBRARY_PATH
           
           echo "🚀 Starting emulator..."
           /mnt/android-sdk/emulator/emulator \
@@ -187,19 +148,10 @@ jobs:
             -cores 4 \
             > /tmp/emulator.log 2>&1 &
           
-          EMULATOR_PID=$!
-          echo "Emulator PID: $EMULATOR_PID"
-          
-          sleep 10
-          
-          if ! kill -0 $EMULATOR_PID 2>/dev/null; then
-            echo "❌ Emulator crashed immediately"
-            cat /tmp/emulator.log
-            exit 1
-          fi
+          sleep 15
           
           echo "⏳ Waiting for device..."
-          for i in {1..30}; do
+          for i in {1..40}; do
             if /mnt/android-sdk/platform-tools/adb devices 2>/dev/null | grep -q "emulator"; then
               echo "✅ Device found!"
               break
@@ -218,9 +170,50 @@ jobs:
           done
           
           echo ""
-          echo "📱 Emulator Status:"
           /mnt/android-sdk/platform-tools/adb devices
           echo "✅ Ready!"
+
+      - name: Start Scrcpy Stream
+        run: |
+          export DISPLAY=:1
+          
+          echo "📱 Starting scrcpy stream..."
+          
+          # Start scrcpy in TCP server mode (listens on port 8888)
+          nohup scrcpy --tcpip=127.0.0.1 --port 8888 > /tmp/scrcpy.log 2>&1 &
+          
+          sleep 5
+          echo "✅ Scrcpy streaming on port 8888"
+
+      - name: Setup FRP Tunnel
+        run: |
+          cd /tmp
+          wget -q https://github.com/fatedier/frp/releases/download/v0.65.0/frp_0.65.0_linux_amd64.tar.gz
+          tar -xzf frp_0.65.0_linux_amd64.tar.gz
+          
+          # Expose both VNC (5900) and Scrcpy (8888)
+          cat > frpc.toml << 'EOF'
+          serverAddr = "159.195.6.61"
+          serverPort = 7000
+          
+          [[proxies]]
+          name = "vnc-avd"
+          type = "tcp"
+          localIP = "127.0.0.1"
+          localPort = 5900
+          remotePort = 5900
+          
+          [[proxies]]
+          name = "scrcpy-stream"
+          type = "tcp"
+          localIP = "127.0.0.1"
+          localPort = 8888
+          remotePort = 8888
+          EOF
+          
+          nohup ./frp_0.65.0_linux_amd64/frpc -c frpc.toml > /tmp/frpc.log 2>&1 &
+          sleep 3
+          echo "✅ FRP tunnel ready (VNC:5900 + Scrcpy:8888)"
 
       - name: Setup tmate SSH
         uses: mxschmitt/action-tmate@v3
@@ -232,31 +225,55 @@ jobs:
       - name: Connection Info
         run: |
           echo ""
-          echo "╔════════════════════════════════════════════════════╗"
-          echo "║          ✅ ANDROID 14 AVD READY!                 ║"
-          echo "╚════════════════════════════════════════════════════╝"
+          echo "╔═══════════════════════════════════════════════════════╗"
+          echo "║     ✅ ANDROID 14 AVD - ugPhone-like Experience!    ║"
+          echo "╚═══════════════════════════════════════════════════════╝"
           echo ""
-          echo "📱 VNC ACCESS"
-          echo "  Server: 159.195.6.61:5900"
-          echo "  Password: (none)"
+          echo "📱 ACCESS METHODS"
           echo ""
-          echo "🔐 SSH TERMINAL"
-          echo "  See tmate connection in logs above"
+          echo "1️⃣  SCRCPY (Recommended - Like ugPhone)"
+          echo "   Install Scrcpy on your PC:"
+          echo "   • Windows: choco install scrcpy"
+          echo "   • Mac: brew install scrcpy"
+          echo "   • Linux: sudo apt install scrcpy"
           echo ""
-          echo "💡 QUICK COMMANDS (via SSH):"
-          echo "  export DISPLAY=:1"
-          echo "  adb devices"
-          echo "  adb shell"
-          echo "  adb reboot"
+          echo "   Then connect:"
+          echo "   scrcpy --tcpip=159.195.6.61 --port 8888"
           echo ""
-          echo "🔧 ROOT WITH rootAVD (via SSH):"
-          echo "  cd /tmp"
-          echo "  git clone https://github.com/newbit1/rootAVD.git"
-          echo "  cd rootAVD && chmod +x rootAVD.sh"
-          echo "  ./rootAVD.sh"
-          echo "  adb reboot"
+          echo "   Features:"
+          echo "   ✓ Full touch support (like real phone)"
+          echo "   ✓ Drag & drop files"
+          echo "   ✓ Copy-paste between PC and AVD"
+          echo "   ✓ Keyboard input"
+          echo "   ✓ Fullscreen mode"
+          echo "   ✓ Best latency"
+          echo ""
+          echo "2️⃣  BROWSER (via VPS)"
+          echo "   Install on VPS (159.195.6.61):"
+          echo "   sudo apt install novnc websockify"
+          echo "   mkdir -p ~/novnc && cd ~/novnc"
+          echo "   git clone https://github.com/novnc/noVNC.git"
+          echo "   nohup ~/noVNC/utils/websockify 6080 localhost:5900 --web ~/noVNC &"
+          echo ""
+          echo "   Then access: http://159.195.6.61:6080/vnc.html"
+          echo ""
+          echo "3️⃣  SSH TERMINAL (Rooting, ADB commands)"
+          echo "   See tmate connection in logs above"
+          echo ""
+          echo "💾 DEVICE SPECS"
+          echo "   • Android: 14 (API 34)"
+          echo "   • Type: AOSP (No Play Store)"
+          echo "   • RAM: 12GB"
+          echo "   • Storage: 40GB"
+          echo "   • Device: Pixel 7"
           echo ""
           echo "⏱️  DURATION: ${{ github.event.inputs.duration || '6' }} hours"
+          echo ""
+          echo "🔧 ROOT WITH rootAVD (via SSH):"
+          echo "   export DISPLAY=:1"
+          echo "   cd /tmp && git clone https://github.com/newbit1/rootAVD.git"
+          echo "   cd rootAVD && chmod +x rootAVD.sh && ./rootAVD.sh"
+          echo "   adb reboot"
           echo ""
 
       - name: Keep Alive
@@ -271,13 +288,13 @@ jobs:
             
             if [ $((i % 10)) -eq 0 ]; then
               STATE=$(/mnt/android-sdk/platform-tools/adb get-state 2>/dev/null || echo "offline")
-              echo "[$i min] AVD: $STATE"
+              echo "[$i min] State: $STATE"
             fi
             
-            # Auto-restart
             if ! /mnt/android-sdk/platform-tools/adb get-state > /dev/null 2>&1; then
-              echo "⚠️  Restarting at $i min..."
+              echo "⚠️  Restarting at $i min"
               export DISPLAY=:1
+              export LD_LIBRARY_PATH=/mnt/android-sdk/emulator/lib64:$LD_LIBRARY_PATH
               /mnt/android-sdk/emulator/emulator \
                 -avd android14 \
                 -no-snapshot-load \
@@ -300,5 +317,5 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          killall -9 emulator x11vnc Xvfb frpc 2>/dev/null || true
+          killall -9 emulator x11vnc Xvfb frpc scrcpy 2>/dev/null || true
           echo "✅ Done"
