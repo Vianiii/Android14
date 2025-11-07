@@ -11,7 +11,7 @@ on:
 jobs:
   android-emulator:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 480
     
     steps:
       - uses: actions/checkout@v4
@@ -19,7 +19,7 @@ jobs:
       - name: Install Packages
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y wget unzip curl net-tools git xvfb x11vnc dbus-x11 libxext6 libxrender1 libx11-6 libfreetype6 libfontconfig1 libxkbcommon0 libxkbfile1 libxcb1 libxcb-render0 libxcb-shape0 libc6 libstdc++6 libtinfo6 libncurses6 libasound2t64 mesa-utils libglu1-mesa ffmpeg adb
+          sudo apt-get install -y wget unzip curl net-tools git xvfb x11vnc dbus-x11 libxext6 libxrender1 libx11-6 libfreetype6 libfontconfig1 libxkbcommon0 libxkbfile1 libxcb1 libxcb-render0 libxcb-shape0 libc6 libstdc++6 libtinfo6 libncurses6 libasound2t64 mesa-utils libglu1-mesa ffmpeg adb tmate
           echo "✅ Packages installed"
 
       - name: Enable KVM
@@ -116,7 +116,7 @@ jobs:
           echo "Emulator PID: $EMULATOR_PID"
           sleep 20
           if ! kill -0 $EMULATOR_PID 2>/dev/null; then
-            echo "Emulator crashed"
+            echo "❌ Emulator crashed"
             tail -50 /tmp/emulator.log
             exit 1
           fi
@@ -140,7 +140,7 @@ jobs:
               break
             fi
             if [ $((BOOT_WAIT % 30)) -eq 0 ]; then
-              echo "Booting... $BOOT_WAIT seconds"
+              echo "⏳ Booting... $BOOT_WAIT seconds"
             fi
             sleep 5
             BOOT_WAIT=$((BOOT_WAIT + 5))
@@ -153,12 +153,12 @@ jobs:
           echo "🔌 Starting VNC..."
           x11vnc -display :1 -forever -nopw -rfbport 5900 -shared -bg -xkb
           sleep 2
-          echo "✅ VNC started"
+          netstat -tuln | grep 5900 && echo "✅ VNC on port 5900" || echo "⚠️  VNC port issue"
 
       - name: Setup FRP Tunnel
         run: |
           cd /tmp
-          echo "🌐 Setting up FRP..."
+          echo "🌐 Setting up FRP tunnel..."
           wget -q https://github.com/fatedier/frp/releases/download/v0.65.0/frp_0.65.0_linux_amd64.tar.gz
           tar -xzf frp_0.65.0_linux_amd64.tar.gz
           cat > frpc.toml << 'FRPEOF'
@@ -172,43 +172,75 @@ jobs:
           localPort = 5900
           remotePort = 5900
           FRPEOF
+          
           nohup ./frp_0.65.0_linux_amd64/frpc -c frpc.toml > /tmp/frpc.log 2>&1 &
           sleep 3
-          echo "✅ FRP tunnel ready"
+          ps aux | grep frpc | grep -v grep && echo "✅ FRP tunnel active" || (echo "❌ FRP failed"; cat /tmp/frpc.log)
 
       - name: Setup tmate SSH
         uses: mxschmitt/action-tmate@v3
         with:
           detached: true
           limit-access-to-actor: false
-        timeout-minutes: 5
+        timeout-minutes: 480
 
       - name: Connection Info
         run: |
           echo ""
-          echo "✅ ANDROID 14 AVD READY"
-          echo "========================"
-          echo "🌐 Browser: http://159.195.6.61"
-          echo "📱 Device: Android 14 (Pixel 7, 12GB RAM, 40GB Storage)"
-          echo "🔐 SSH: See tmate connection above"
+          echo "╔════════════════════════════════════════════════════════╗"
+          echo "║         ✅ ANDROID 14 AVD READY                       ║"
+          echo "╚════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "🌐 Browser Access (noVNC):"
+          echo "   http://159.195.6.61"
+          echo ""
+          echo "📱 Device:"
+          echo "   OS: Android 14"
+          echo "   Model: Pixel 7"
+          echo "   RAM: 12GB"
+          echo "   Storage: 40GB"
+          echo ""
+          echo "🔌 VNC Direct:"
+          echo "   159.195.6.61:5900"
+          echo ""
+          echo "🔐 SSH via tmate:"
+          echo "   Check 'Setup tmate SSH' step output above for connection"
+          echo ""
           echo "⏱️  Duration: ${{ github.event.inputs.duration || '6' }} hours"
           echo ""
 
-      - name: Keep Alive
+      - name: Keep Alive + Monitor
         run: |
           HOURS=${{ github.event.inputs.duration || '6' }}
-          MINUTES=$((HOURS * 60))
-          echo "Running for $HOURS hours..."
-          for ((i=0; i<MINUTES; i++)); do
+          TOTAL_MINUTES=$((HOURS * 60))
+          
+          echo "⏳ Keeping session alive for $HOURS hours..."
+          echo ""
+          
+          for ((i=0; i<TOTAL_MINUTES; i++)); do
             sleep 60
+            
+            # Print status every 10 minutes
             if [ $((i % 10)) -eq 0 ]; then
+              UPTIME=$((i / 60))
               STATE=$(/mnt/android-sdk/platform-tools/adb get-state 2>/dev/null || echo "offline")
-              echo "[$i min] State: $STATE"
+              VNC_CHECK=$(netstat -tuln 2>/dev/null | grep 5900 || echo "")
+              
+              echo "[$UPTIME h / $HOURS h] Device: $STATE | VNC: $([ -n "$VNC_CHECK" ] && echo "✅" || echo "❌")"
+            fi
+            
+            # Check if emulator crashed
+            if ! /mnt/android-sdk/platform-tools/adb devices 2>/dev/null | grep -q "emulator"; then
+              echo "⚠️  Device disconnected at $((i / 60)) hours"
             fi
           done
+          
+          echo ""
+          echo "✅ Keep-alive completed"
 
       - name: Cleanup
         if: always()
         run: |
-          killall -9 emulator x11vnc Xvfb frpc 2>/dev/null || true
-          echo "✅ Done"
+          echo "🧹 Cleaning up..."
+          killall -9 emulator x11vnc Xvfb frpc tmate 2>/dev/null || true
+          echo "✅ Cleanup complete"
